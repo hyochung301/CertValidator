@@ -88,7 +88,7 @@ int main(int argc, char *argv[]) {
     }
 
     // TODO: Set the location of the trust store. Currently based on Debian.
-    if (!SSL_CTX_load_verify_locations(ctx, "/etc/ssl/certs/ca-certificates.crt", NULL)) {
+    if (!SSL_CTX_load_verify_locations(ctx, "/tmp/all_certs.pem", NULL)) {
         fprintf(stderr, "Error setting up trust store.\n");
         ERR_print_errors_fp(stderr);
         SSL_CTX_free(ctx);
