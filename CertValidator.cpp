@@ -9,7 +9,53 @@
 #include <openssl/ocsp.h>
 #include <openssl/bio.h>
 
-// TODO: Callback function for custom certificate verification
+#include <iostream>
+using namespace std;
+
+
+// Function to check if a certificate has expired
+int check_expiration(X509 *cert) {
+    // Get the notAfter field from the certificate
+    ASN1_TIME* notAfter = X509_get_notAfter(cert);
+
+    // Convert the notAfter field to a string
+    BIO* bio = BIO_new(BIO_s_mem());
+    ASN1_TIME_print(bio, notAfter);
+    char* notAfterStr = new char(128);
+    memset(notAfterStr, 0, 128);
+    BIO_read(bio, notAfterStr, 128 - 1);
+    BIO_free(bio);
+
+    // Check if the certificate has expired
+    if (X509_cmp_current_time(notAfter) < 0) {
+        printf("Certificate has expired on %s\n", notAfterStr);
+        free(notAfterStr);
+        return 0;
+    }
+
+    delete[] notAfterStr;
+    return 1;
+}
+
+// Callback function for custom certificate verification
+int verify_callback(int preverify, X509_STORE_CTX* x509_ctx) {
+    // Retrieve the certificate from the context
+    X509* cert = X509_STORE_CTX_get_current_cert(x509_ctx);
+    if (cert == NULL) {
+        printf("Error retrieving certificate\n");
+        return 0;
+    }
+
+    // Check if the certificate has expired
+    if (!check_expiration(cert)) {
+        return 0;
+    }
+
+    // Check if the certificate is revoked by the OCSP response
+
+    return preverify;
+}
+
 
 void print_certificate(X509 *cert) {
     if (cert) {
@@ -87,8 +133,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    // TODO: Set the location of the trust store. Currently based on Debian.
-    if (!SSL_CTX_load_verify_locations(ctx, "/tmp/all_certs.pem", NULL)) {
+    if (!SSL_CTX_load_verify_locations(ctx, "/opt/homebrew/etc/openssl@3/cert.pem", NULL)) {
         fprintf(stderr, "Error setting up trust store.\n");
         ERR_print_errors_fp(stderr);
         SSL_CTX_free(ctx);
@@ -96,7 +141,7 @@ int main(int argc, char *argv[]) {
     }
 
     // TODO: automatic chain verification should be modified
-    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, verify_callback);
 
 
     // Create a new BIO chain with an SSL BIO using the context
@@ -173,7 +218,7 @@ int main(int argc, char *argv[]) {
                 if (fp != NULL) {
                     const int length = i2d_OCSP_RESPONSE(response, NULL);
                     if (length > 0) {
-                        unsigned char *der = malloc(length);
+                        unsigned char *der = new unsigned char[length];;
                         unsigned char *p = der;
                         if (i2d_OCSP_RESPONSE(response, &p) > 0) {
                             fwrite(der, 1, length, fp);
@@ -181,7 +226,7 @@ int main(int argc, char *argv[]) {
                         } else {
                             fprintf(stderr, "Error converting OCSP response to DER format.\n");
                         }
-                        free(der);
+                        delete[] der;
                     } else {
                         fprintf(stderr, "Error determining OCSP response length.\n");
                     }
@@ -222,8 +267,24 @@ int main(int argc, char *argv[]) {
             snprintf(filename, sizeof(filename), "depth%d.pem", i);
             save_certificate(cert, filename);
         }
-        // TODO: Get CRL distribution points and OCSP responder URI
+
+        
     }
+    // Get OCSP responder URI
+        STACK_OF(OPENSSL_STRING) *aia = X509_get1_ocsp(cert);
+        if (aia) {
+            string uri = new char[256];
+            uri = sk_OPENSSL_STRING_value(aia, 0);
+            printf("OCSP responder URI: %s\n", uri.c_str());
+            sk_OPENSSL_STRING_free(aia);
+        } else {
+            printf("No OCSP responder URI found.\n");
+        }
+    // TODO: send OCSP request to responder URI
+    // TODO: verify OCSP response
+    // TODO: check if certificate is revoked
+
+        
 
     // Clean up
     ERR_clear_error();

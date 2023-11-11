@@ -12,6 +12,10 @@ The following code validates the certificate provided by the server.
 ## Preparation
 ### Install OpenSSL
 OpenSSL pre-installed on MacOS
+But for latest version of OpenSSL(v3)
+```bash
+brew install openssl
+```
 
 ### Including OpenSSL libraries
 
@@ -35,12 +39,18 @@ Now, `/tmp/all_certs.pem` is the new location for root certs.
 ## Instructions
 ### Compile ***CertValidator.c***
 ```bash
-clang sampleClient.c -o sampleClient -lssl -lcrypto
+clang++ CertValidator.cpp -o CertValidator -I/opt/homebrew/opt/openssl@3/include -L/opt/homebrew/opt/openssl@3/lib -lssl -lcrypto
 ```
 
 ### Run ***CertValidator***
 ```
-./sampleClient www.google.com
-./sampleClient –v 147.46.10.129
-./sampleClient –o expired-rsa-dv.ssl.com
+./CertValidator www.google.com
+./CertValidator –v 147.46.10.129
+./CertValidator –o expired-rsa-dv.ssl.com
 ```
+
+## Reference
+Openssl-ocsp : https://www.openssl.org/docs/man3.0/man1/openssl-ocsp.html
+
+# Developer
+Hyokwon Chung (hyochung@utexas.edu)
