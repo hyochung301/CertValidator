@@ -138,7 +138,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    if (!SSL_CTX_load_verify_locations(ctx, "/opt/homebrew/etc/openssl@3/cert.pem", NULL)) {
+    if (!SSL_CTX_load_verify_locations(ctx, "/opt/homebrew/etc/openssl@1.1/cert.pem", NULL)) {
         fprintf(stderr, "Error setting up trust store.\n");
         ERR_print_errors_fp(stderr);
         SSL_CTX_free(ctx);
