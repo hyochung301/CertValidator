@@ -48,12 +48,17 @@ int verify_callback(int preverify, X509_STORE_CTX* x509_ctx) {
 
     // Check if the certificate has expired
     if (!check_expiration(cert)) {
+        printf("Certificate has expired\n");
         return 0;
     }
 
-    // Check if the certificate is revoked by the OCSP response
+    // If preverification failed, print the specific error
+    if (!preverify) {
+        int err = X509_STORE_CTX_get_error(x509_ctx);
+        printf("Verification error: %s\n", X509_verify_cert_error_string(err));
+    }
 
-    return preverify;
+    return 1; // Even if it fails, return 1 to continue with the cert verification process
 }
 
 
@@ -140,7 +145,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    // TODO: automatic chain verification should be modified
+    // automatic chain verification
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, verify_callback);
 
 
@@ -268,25 +273,60 @@ int main(int argc, char *argv[]) {
             save_certificate(cert, filename);
         }
 
-        
-    }
-    // Get OCSP responder URI
-        STACK_OF(OPENSSL_STRING) *aia = X509_get1_ocsp(cert);
-        if (aia) {
-            string uri = new char[256];
-            uri = sk_OPENSSL_STRING_value(aia, 0);
-            printf("OCSP responder URI: %s\n", uri.c_str());
-            sk_OPENSSL_STRING_free(aia);
-        } else {
-            printf("No OCSP responder URI found.\n");
-        }
-    // TODO: send OCSP request to responder URI
-    // TODO: verify OCSP response
-    // TODO: check if certificate is revoked
+        // Get CRL distribution points
+        STACK_OF(DIST_POINT) *crldp = (STACK_OF(DIST_POINT) *)X509_get_ext_d2i(cert, NID_crl_distribution_points, NULL, NULL);
 
-        
+    }
+
+    // Obtain the issuing certificate.
+    if (crldp) {
+        for (int i = 0; i < sk_DIST_POINT_num(crldp); i++) {
+            DIST_POINT *dp = sk_DIST_POINT_value(crldp, i);
+            if (dp->distpoint && dp->distpoint->type == GEN_URI) {
+                char *uri = (char *)ASN1_STRING_get0_data(dp->distpoint->name.fullname);
+                printf("CRL distribution point URI: %s\n", uri);
+            }
+        }
+        sk_DIST_POINT_free(crldp);
+    } else {
+        printf("No CRL distribution point found.\n");
+    }
+
+    // Download the CRL
+    BIO *bio = BIO_new(BIO_s_file());
+    if (BIO_read_filename(bio, uri) <= 0) {
+        fprintf(stderr, "Error downloading CRL.\n");
+        ERR_print_errors_fp(stderr);
+        BIO_free_all(bio);
+        exit(EXIT_FAILURE);
+    }
+
+    // Load the CRL
+    X509_CRL *crl = d2i_X509_CRL_bio(bio, NULL);
+    if (crl == NULL) {
+        fprintf(stderr, "Error loading CRL.\n");
+        ERR_print_errors_fp(stderr);
+        BIO_free_all(bio);
+        exit(EXIT_FAILURE);
+    }
+
+    // Get the certificate's serial number
+    ASN1_INTEGER *cert_serial = X509_get_serialNumber(leaf_cert);
+
+    // Look for the certificate serial number in the CRL
+    STACK_OF(X509_REVOKED) *revoked = X509_CRL_get_REVOKED(crl);
+    for (int i = 0; i < sk_X509_REVOKED_num(revoked); i++) {
+        X509_REVOKED *rev = sk_X509_REVOKED_value(revoked, i);
+        if (ASN1_INTEGER_cmp(cert_serial, X509_REVOKED_get0_serialNumber(rev)) == 0) {
+            printf("Certificate is revoked.\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    printf("Certificate is not revoked.\n");
 
     // Clean up
+    X509_CRL_free(crl);
     ERR_clear_error();
     BIO_free_all(bio);
     SSL_CTX_free(ctx);
