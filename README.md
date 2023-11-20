@@ -44,14 +44,25 @@ both work the same
 ## Instructions
 ### Compile ***CertValidator.c***
 ```bash
-clang++ CertValidator.cpp -o CertValidator -I/opt/homebrew/opt/openssl@1.1/include -L/opt/homebrew/opt/openssl@1.1/lib -lssl -lcrypto
+clang++ CertValidator.cpp -o CertValidator -I/opt/homebrew/opt/openssl@1.1/include -L/opt/homebrew/opt/openssl@1.1/lib -lssl -lcrypto -lcurl
 ```
 
 ### Run ***CertValidator***
+-v option for detailed cert info
+-o for downloading certs in the chain
 ```
+// examples
 ./CertValidator www.google.com
 ./CertValidator –v 147.46.10.129
 ./CertValidator –o expired-rsa-dv.ssl.com
+
+// to test
+// OCSP stapling, valid
+./CertValidator naver.com
+
+// for CRL/OCSP revoked cert test
+./CertValidator revoked-rsa-dv.ssl.com 
+
 ```
 
 ## Reference

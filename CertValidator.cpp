@@ -8,10 +8,192 @@
 #include <openssl/pem.h>
 #include <openssl/ocsp.h>
 #include <openssl/bio.h>
-
+#include <curl/curl.h>
+#include <vector>
+#include <string>
 #include <iostream>
 using namespace std;
 
+
+int get_ocsp_responder_uri(X509 *cert){
+        STACK_OF(OPENSSL_STRING) *aia = X509_get1_ocsp(cert);
+        if (aia) {
+            string uri = new char[256];
+            uri = sk_OPENSSL_STRING_value(aia, 0);
+            cout << "OCSP URI" << endl << uri << endl << endl;
+            sk_OPENSSL_STRING_free(aia);
+            return 0;
+        } else {
+            cout << "No OCSP responder URI found." << endl;
+            return -1;
+        }
+}
+
+void download_crl(const char* url, const char* filename) {
+    CURL *curl;
+    FILE *fp;
+    CURLcode res;
+
+    curl = curl_easy_init();
+    if (curl) {
+        fp = fopen(filename, "wb");
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NULL);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
+        res = curl_easy_perform(curl);
+        /* Check for errors */ 
+        if(res != CURLE_OK)
+            fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        /* always cleanup */ 
+        curl_easy_cleanup(curl);
+        fclose(fp);
+    }
+}
+
+std::vector<std::string> get_crl_distribution_point(X509 *cert) {
+    int i, j;
+    std::vector<std::string> crl_dist_points;
+
+    // Get the CRL distribution points extension
+    STACK_OF(DIST_POINT) * distpoints = (STACK_OF(DIST_POINT) *)X509_get_ext_d2i(cert, NID_crl_distribution_points, NULL, NULL);
+
+    if (distpoints) {
+        std::cout << "CRL distribution points:" << std::endl;
+
+        // Loop through the distribution points
+        for (i = 0; i < sk_DIST_POINT_num(distpoints); i++) {
+            DIST_POINT *distpoint = sk_DIST_POINT_value(distpoints, i);
+
+            // The distribution point is a URI
+            if (distpoint->distpoint && distpoint->distpoint->type == 0) {
+
+                // Loop through the GENERAL_NAMEs
+                for (j = 0; j < sk_GENERAL_NAME_num(distpoint->distpoint->name.fullname); j++) {
+                    GENERAL_NAME *gen = sk_GENERAL_NAME_value(distpoint->distpoint->name.fullname, j);
+
+                    if (gen->type == GEN_URI) {
+                        ASN1_STRING *uri = gen->d.uniformResourceIdentifier;
+                        // Convert the data to a C string
+                        std::string crl_dist_point = std::string((char *)ASN1_STRING_get0_data(uri));                        
+                        std::cout << crl_dist_point << std::endl << std::endl;
+
+                        // Add the CRL distribution point to the vector
+                        crl_dist_points.push_back(crl_dist_point);
+                    }
+                }
+            } else {
+                std::cout << "No distribution point found." << std::endl;
+            }
+        }
+
+        // Free the distribution points
+        sk_DIST_POINT_free(distpoints);
+    } else {
+        std::cout << "No CRL distribution points extension found.\n";
+    }
+
+    return crl_dist_points;
+}
+
+// Function to check if a certificate is revoked
+bool revocation_check_driver_crl(X509 *cert, X509_CRL *crl) {
+    // Driver that actually checks CRL revocation by parsing through crl
+    // Called by crl_revocation()
+
+    // Get the serial number of the certificate
+    ASN1_INTEGER *cert_serial = X509_get_serialNumber(cert);
+
+    // Get the list of revoked certificates
+    STACK_OF(X509_REVOKED) *revoked = X509_CRL_get_REVOKED(crl);
+
+    // Check each revoked certificate
+    for (int i = 0; i < sk_X509_REVOKED_num(revoked); i++) {
+        X509_REVOKED *rev = sk_X509_REVOKED_value(revoked, i);
+
+        // Get the serial number of the revoked certificate
+        const ASN1_INTEGER *rev_serial = X509_REVOKED_get0_serialNumber(rev);
+
+        // Compare the serial numbers
+        if (ASN1_INTEGER_cmp(cert_serial, rev_serial) == 0) {
+            std::cout << "Certificate revoked"<< endl;
+
+            // Get the revocation date
+            const ASN1_TIME *rev_time = X509_REVOKED_get0_revocationDate(rev);
+
+            // Convert the revocation date to a string
+            BIO *bio = BIO_new(BIO_s_mem());
+            ASN1_TIME_print(bio, rev_time);
+            BUF_MEM *bptr;
+            BIO_get_mem_ptr(bio, &bptr);
+
+            // Print the revocation time
+            std::string time_str(bptr->data, bptr->length);
+            std::cout << "Revocation Time: " << time_str << endl;
+
+            // Clean up
+            BIO_free(bio);
+
+            // The certificate is revoked
+            return true;
+        }
+    }
+
+    // The certificate is not revoked
+    cout << "Certificate is not revoked" << endl;
+    return false;
+}
+
+int crl_revocation(X509 *cert, vector<string> &crl_dist_points) {
+    // Call this function to check if a certificate is revoked using CRL
+
+    // Get the leaf certificate
+    if (cert == NULL) {
+        fprintf(stderr, "Error getting leaf certificate.\n");
+        return -1;
+    }
+    // Create a new X509_STORE
+    X509_STORE *store = X509_STORE_new();
+    if (store == NULL) {
+        fprintf(stderr, "Error creating X509_STORE.\n");
+        return -1;
+    }
+
+    // Loop over the CRL distribution points
+    for (const auto& crl_dist_point : crl_dist_points) {
+        // Convert the string to a C string
+        const char *crl_dist_point_c_str = crl_dist_point.c_str();
+
+        // Download the CRL
+        if (crl_dist_point_c_str) {
+            download_crl(crl_dist_point_c_str, "crl.crl");
+        } else {
+            fprintf(stderr, "Error: CRL distribution point is NULL.\n");
+            return -1;
+        }
+        
+        printf("CRL Distribution Point: %s\n", crl_dist_point_c_str);
+
+        // Load the CRL
+        BIO *bio = BIO_new_file("crl.crl", "rb");
+        if (!bio) {
+            fprintf(stderr, "Error opening file.\n");
+            return -1;
+        }
+
+        X509_CRL *crl = d2i_X509_CRL_bio(bio, NULL);
+        if (!crl) {
+            fprintf(stderr, "Error reading CRL.\n");
+            ERR_print_errors_fp(stderr);
+            return -1;
+        }
+
+        if (revocation_check_driver_crl(cert, crl) == true) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
 
 // Function to check if a certificate has expired
 int check_expiration(X509 *cert) {
@@ -21,7 +203,7 @@ int check_expiration(X509 *cert) {
     // Convert the notAfter field to a string
     BIO* bio = BIO_new(BIO_s_mem());
     ASN1_TIME_print(bio, notAfter);
-    char* notAfterStr = new char(128);
+    char* notAfterStr = new char[128];
     memset(notAfterStr, 0, 128);
     BIO_read(bio, notAfterStr, 128 - 1);
     BIO_free(bio);
@@ -29,7 +211,7 @@ int check_expiration(X509 *cert) {
     // Check if the certificate has expired
     if (X509_cmp_current_time(notAfter) < 0) {
         printf("Certificate has expired on %s\n", notAfterStr);
-        free(notAfterStr);
+        delete[] notAfterStr;
         return 0;
     }
 
@@ -207,7 +389,7 @@ int main(int argc, char *argv[]) {
     OCSP_RESPONSE *response = NULL;
 
     if (ocsp_resp_len > 0) {
-        printf("OCSP response is stapled.\n");
+        printf("OCSP response is stapled.\n\n");
         
         // Decode the OCSP response
         const unsigned char *p = ocsp_resp; // temporary pointer
@@ -245,7 +427,7 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Failed to decode OCSP response.\n");
         }
     } else {
-        printf("No OCSP stapling response received.\n");
+        printf("No OCSP stapling response received.\n\n");
     }
 
     // Retrieve the certificate chain
@@ -258,6 +440,12 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
+    // Check if the certificate has been revoked
+    //if (crl_revocation(sk_X509_value(cert_chain, 0)) != 0) {
+    //    printf("Certificate has been revoked\n");
+    //    return 0;
+    //}
+    vector<string> crl_dist_points; 
     // Print details for each certificate in the chain
     for (int i = 0; i < sk_X509_num(cert_chain); i++) {
         cert = sk_X509_value(cert_chain, i);
@@ -272,64 +460,27 @@ int main(int argc, char *argv[]) {
             snprintf(filename, sizeof(filename), "depth%d.pem", i);
             save_certificate(cert, filename);
         }
-
-        // Get CRL distribution points
-        STACK_OF(DIST_POINT) *crldp = (STACK_OF(DIST_POINT) *)X509_get_ext_d2i(cert, NID_crl_distribution_points, NULL, NULL);
-
-    }
-
-    // Obtain the issuing certificate.
-    if (crldp) {
-        for (int i = 0; i < sk_DIST_POINT_num(crldp); i++) {
-            DIST_POINT *dp = sk_DIST_POINT_value(crldp, i);
-            if (dp->distpoint && dp->distpoint->type == GEN_URI) {
-                char *uri = (char *)ASN1_STRING_get0_data(dp->distpoint->name.fullname);
-                printf("CRL distribution point URI: %s\n", uri);
-            }
-        }
-        sk_DIST_POINT_free(crldp);
-    } else {
-        printf("No CRL distribution point found.\n");
-    }
-
-    // Download the CRL
-    BIO *bio = BIO_new(BIO_s_file());
-    if (BIO_read_filename(bio, uri) <= 0) {
-        fprintf(stderr, "Error downloading CRL.\n");
-        ERR_print_errors_fp(stderr);
-        BIO_free_all(bio);
-        exit(EXIT_FAILURE);
-    }
-
-    // Load the CRL
-    X509_CRL *crl = d2i_X509_CRL_bio(bio, NULL);
-    if (crl == NULL) {
-        fprintf(stderr, "Error loading CRL.\n");
-        ERR_print_errors_fp(stderr);
-        BIO_free_all(bio);
-        exit(EXIT_FAILURE);
-    }
-
-    // Get the certificate's serial number
-    ASN1_INTEGER *cert_serial = X509_get_serialNumber(leaf_cert);
-
-    // Look for the certificate serial number in the CRL
-    STACK_OF(X509_REVOKED) *revoked = X509_CRL_get_REVOKED(crl);
-    for (int i = 0; i < sk_X509_REVOKED_num(revoked); i++) {
-        X509_REVOKED *rev = sk_X509_REVOKED_value(revoked, i);
-        if (ASN1_INTEGER_cmp(cert_serial, X509_REVOKED_get0_serialNumber(rev)) == 0) {
-            printf("Certificate is revoked.\n");
-            exit(EXIT_FAILURE);
+        // Get CRL distribution points and OCSP responder URI
+        if (i == 0) {
+            crl_dist_points = get_crl_distribution_point(cert);
+            get_ocsp_responder_uri(cert);
         }
     }
+    // Check if the certificate has been revoked
+    // CRL
+    cout << "Checking CRL..." << endl;
+    X509 *leaf_cert = sk_X509_value(cert_chain, 0);
+    if (crl_revocation(leaf_cert, crl_dist_points) == -1) {
+        printf("Certificate is cannot be checked using CRL\n");
+    }
 
-    printf("Certificate is not revoked.\n");
+    // OCSP
+    cout << endl << "Checking OCSP..." << endl;
+    cout << "Certificate status: Not implemented yet" << endl;
 
     // Clean up
-    X509_CRL_free(crl);
     ERR_clear_error();
     BIO_free_all(bio);
     SSL_CTX_free(ctx);
-
     return 0;
 }
