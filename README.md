@@ -27,7 +27,7 @@ You can include the libraries used by OpenSSL by running the following commands 
 
 ### Exporting Root CA
 
-Mac stores its root CA in different ".keychain" files, which OpenSSL does not support. 
+Mac stores its root CA in different ".keychain" files, which OpenSSL does not support. <br />
 To export all root CA to ".pem" format (which is supported by OpenSSL), run the following command:
 
 ```bash
@@ -51,17 +51,51 @@ clang++ CertValidator.cpp -o CertValidator -I/opt/homebrew/opt/openssl@1.1/inclu
 -v option for detailed cert info
 -o for downloading certs in the chain
 ```
-// examples
+// Examples
 ./CertValidator www.google.com
 ./CertValidator –v 147.46.10.129
 ./CertValidator –o expired-rsa-dv.ssl.com
 
-// to test
+// Test
 // OCSP stapling, valid
 ./CertValidator naver.com
-
-// for CRL/OCSP revoked cert test
+// CRL/OCSP revoked 
 ./CertValidator revoked-rsa-dv.ssl.com 
+
+```
+### Sample Output
+```
+./CertValidator www.naver.com
+OCSP response is stapled.
+
+Certificate at depth: 0
+Subject: /C=KR/ST=Gyeonggi-do/L=Seongnam-si/O=NAVER Corp./CN=www.naver.net
+Issuer: /C=US/O=DigiCert Inc/CN=DigiCert TLS RSA SHA256 2020 CA1
+
+CRL distribution points:
+http://crl3.digicert.com/DigiCertTLSRSASHA2562020CA1-4.crl
+
+http://crl4.digicert.com/DigiCertTLSRSASHA2562020CA1-4.crl
+
+OCSP URI
+http://ocsp.digicert.com
+
+Certificate at depth: 1
+Subject: /C=US/O=DigiCert Inc/CN=DigiCert TLS RSA SHA256 2020 CA1
+Issuer: /C=US/O=DigiCert Inc/OU=www.digicert.com/CN=DigiCert Global Root CA
+
+Certificate at depth: 2
+Subject: /C=US/O=DigiCert Inc/OU=www.digicert.com/CN=DigiCert Global Root CA
+Issuer: /C=US/O=DigiCert Inc/OU=www.digicert.com/CN=DigiCert Global Root CA
+
+Checking CRL...
+CRL Distribution Point: http://crl3.digicert.com/DigiCertTLSRSASHA2562020CA1-4.crl
+Certificate is not revoked
+CRL Distribution Point: http://crl4.digicert.com/DigiCertTLSRSASHA2562020CA1-4.crl
+Certificate is not revoked
+
+Checking OCSP...
+Certificate status: GOOD
 
 ```
 
